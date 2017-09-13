@@ -7,6 +7,41 @@ from clang.cindex import TranslationUnit
 from clang.cindex import CursorKind
 
 
+class Visitor(object):
+    def visit(self, cursor):
+        cont = self.process(cursor)
+        if cont:
+            for child in cursor.get_children():
+                self.visit(child)
+            self.end(cursor)
+
+    def process(self, cursor):
+        return True
+
+    def end(self, cursor):
+        pass
+
+class PrintVisitor(Visitor):
+    def __init__(self):
+        self.indent = 0
+
+    def process(self, cursor):
+        print("{}{}: {}".format(
+            "  "*self.indent,
+            cursor.kind.name,
+            cursor.displayname))
+        self.indent += 1
+        return True
+
+    def end(self, cursor):
+        self.indent -= 1
+
+
+def HeaderVisitor(Visitor):
+    def process(self):
+        return True
+
+
 def dump_ast(cursor, decls, is_lib=False, lib="cu"):
     if "DECL" in cursor.kind.name:
         if cursor.displayname.startswith(lib):
@@ -109,10 +144,11 @@ def display(decls):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("usage: {} HEADER".format(sys.argv[0]))
+    if len(sys.argv) < 3:
+        print("usage: {} LIBNAME HEADER".format(sys.argv[0]))
         exit()
-    header = sys.argv[1]
+    header = sys.argv[2]
+    lib = sys.argv[1]
     clang_args = [
         "-std=c++11",
         "-I./",
@@ -133,7 +169,7 @@ def main():
         "function": function_decls,
         "typedef": typedef_decls,
     }
-    dump_ast(tu.cursor, decls, lib="cufft")
+    dump_ast(tu.cursor, decls, lib=lib)
     # display(decls)
     typemap = make_typemap(decls)
     # print(typemap)
@@ -145,16 +181,21 @@ def main():
     print('cdef extern from *:')
     for tp in typemap:
         if typemap[tp] in typemap:
-            print("    cptypedef", canonical_type(tp, typemap), tp)
+            print("    cptypedef {} {} '{}'".format(
+                canonical_type(tp, typemap), tp.replace(lib, ""), tp))
         else:
-            print("    cptypedef", typemap[tp], tp)
+            print("    cptypedef {} {} '{}'".format(
+                typemap[tp], tp.replace(lib, ""), tp))
     print()
     print("cpdef enum:")
     for e in enums:
-        print("    {} = {}".format(e[0], e[1]))
+        print("    {} = {}".format(
+            e[0].replace(lib.upper()+"_", ""), e[1]))
     print()
     for f in functions:
-        print("cpdef {} {}".format(f[0], f[1]))
+        body = f[1].replace(lib, "")
+        body = body.replace(body[0], body[0].lower(), 1)
+        print("cpdef {} {}".format(f[0], body))
 
 
 if __name__ == '__main__':

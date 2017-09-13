@@ -1,4 +1,5 @@
 import sys
+from collections import namedtuple
 
 import clang.cindex
 from clang.cindex import Index
@@ -9,8 +10,7 @@ from clang.cindex import CursorKind
 
 class Visitor(object):
     def visit(self, cursor):
-        cont = self.process(cursor)
-        if cont:
+        if self.process(cursor):
             for child in cursor.get_children():
                 self.visit(child)
             self.end(cursor)
@@ -21,7 +21,9 @@ class Visitor(object):
     def end(self, cursor):
         pass
 
+
 class PrintVisitor(Visitor):
+    """Just dump AST"""
     def __init__(self):
         self.indent = 0
 
@@ -37,8 +39,77 @@ class PrintVisitor(Visitor):
         self.indent -= 1
 
 
-def HeaderVisitor(Visitor):
-    def process(self):
+class EnumDecl(object):
+    def __init__(self, cursor):
+        self.name = cursor.displayname
+        self.dtype = cursor.enum_type.get_canonical().kind.spelling.lower()
+        members = []
+        EnumConst = namedtuple("EnumConst", ["name", "value"])
+        for c in cursor.get_children():
+            if c.kind == CursorKind.ENUM_CONSTANT_DECL:
+                members.append(EnumConst(c.displayname, c.enum_value))
+        self.members = members
+
+
+class FunctionDecl(object):
+    def __init__(self, cursor):
+        self.name = cursor.spelling
+        children = list(cursor.get_children())
+        self.dtype = children[0].spelling if children else "void"
+        Arg = namedtuple("Arg", ["dtype", "name"])
+        self.args = []
+        for c in cursor.get_children():
+            if c.kind == CursorKind.PARM_DECL:
+                tp = c.type.get_canonical()
+                extra = ["pointer", "enum", "typedef"]
+                dtype = tp.kind.spelling.lower()
+                prtcount = 0
+                while dtype in extra:
+                    if dtype == "enum":
+                        dtype = tp.spelling
+                    elif dtype == "pointer":
+                        tp = tp.get_pointee()
+                        dtype = tp.kind.spelling.lower()
+                        prtcount +=1
+                    elif dtype == "typedef":
+                        dtype = tp.get_typedef_name()
+
+                assert(dtype)
+                arg = Arg(dtype+"*"*prtcount, c.displayname)
+                self.args.append(arg)
+
+
+class TypedefDecl(object):
+    def __init__(self, cursor):
+        self.name = cursor.spelling
+        self.alias = cursor.type.get_canonical().kind.spelling.lower()
+        children = list(cursor.get_children())
+        if children:
+            if self.alias == "enum":
+                self.alias = children[0].displayname
+
+
+
+class HeaderVisitor(Visitor):
+    """Extract decl"""
+    def __init__(self):
+        self.enums = []
+        self.functions = []
+        self.typedefs = []
+
+    def process(self, cursor):
+        if not cursor.kind.name.endswith("DECL"):
+            return True
+
+        if cursor.kind == CursorKind.ENUM_DECL:
+            self.enums.append(EnumDecl(cursor))
+            return False
+        elif cursor.kind == CursorKind.FUNCTION_DECL:
+            self.functions.append(FunctionDecl(cursor))
+            return False
+        if cursor.kind == CursorKind.TYPEDEF_DECL:
+            self.typedefs.append(TypedefDecl(cursor))
+            return False
         return True
 
 
@@ -92,7 +163,6 @@ def function_decl(cursor, decls=None):
         tp = c.canonical.spelling
         break
     decls["function"].append([decl, tp, body])
-    # print("{}{} {}".format(decls, tp, decl))
 
 
 def make_typemap(decls):
@@ -160,6 +230,24 @@ def main():
         None,
         TranslationUnit.PARSE_INCOMPLETE &
         TranslationUnit.PARSE_SKIP_FUNCTION_BODIES)
+    h = HeaderVisitor()
+    h.visit(tu.cursor)
+    print("enums", "#"*40)
+    for e in h.enums:
+        print(e.name, e.dtype)
+        for m in e.members:
+            print("\t", m.name, m.value)
+    print("\nfunctions", "#"*40)
+    for fun in h.functions:
+        if "cufft" in fun.name:
+            print(fun.name, fun.dtype)
+            for arg in fun.args:
+                print("\t", arg.dtype, arg.name)
+    print("\ntypedefs", "#"*40)
+    for tdef in h.typedefs:
+        if "cufft" in tdef.name:
+            print(tdef.name, tdef.alias)
+    exit()
 
     enum_decls = []
     typedef_decls = []

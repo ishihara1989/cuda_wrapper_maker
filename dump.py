@@ -89,7 +89,6 @@ class TypedefDecl(object):
                 self.alias = children[0].displayname
 
 
-
 class HeaderVisitor(Visitor):
     """Extract decl"""
     def __init__(self):
@@ -111,6 +110,19 @@ class HeaderVisitor(Visitor):
             self.typedefs.append(TypedefDecl(cursor))
             return False
         return True
+
+    def filter(self, cond):
+        self.enums = [e for e in self.enums if cond(e)]
+        self.functions = [f for f in self.functions if cond(f)]
+        self.typedefs = [t for t in self.typedefs if cond(t)]
+
+    def canonical(self, name):
+        alias = name
+        tmp = [t.alias for t in self.typedefs if t.name == alias]
+        while len(tmp):
+            alias = tmp[0]
+            tmp = [t.alias for t in self.typedefs if t.name == alias]
+        return alias
 
 
 def dump_ast(cursor, decls, is_lib=False, lib="cu"):
@@ -232,6 +244,7 @@ def main():
         TranslationUnit.PARSE_SKIP_FUNCTION_BODIES)
     h = HeaderVisitor()
     h.visit(tu.cursor)
+    h.filter(lambda obj: obj.name.lower().startswith("cufft"))
     print("enums", "#"*40)
     for e in h.enums:
         print(e.name, e.dtype)
@@ -247,6 +260,9 @@ def main():
     for tdef in h.typedefs:
         if "cufft" in tdef.name:
             print(tdef.name, tdef.alias)
+
+    print("")
+    print(h.canonical("cufftResult"))
     exit()
 
     enum_decls = []
@@ -258,13 +274,9 @@ def main():
         "typedef": typedef_decls,
     }
     dump_ast(tu.cursor, decls, lib=lib)
-    # display(decls)
     typemap = make_typemap(decls)
-    # print(typemap)
     enums = make_enums(decls)
-    # print(enums)
     functions = make_functions(decls, typemap)
-    # print(functions)
 
     print('cdef extern from *:')
     for tp in typemap:
